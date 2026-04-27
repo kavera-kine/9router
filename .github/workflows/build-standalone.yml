@@ -31,7 +31,11 @@ jobs:
       - name: Create zip
         run: |
           cd .next/standalone
-          zip -r ../../../9router-standalone-linux.zip .
+          zip -r "$GITHUB_WORKSPACE/9router-standalone-linux.zip" .
+
+      - name: Verify zip exists
+        run: |
+          ls -lh "$GITHUB_WORKSPACE/9router-standalone-linux.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
