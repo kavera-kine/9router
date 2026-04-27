@@ -52,19 +52,44 @@ jobs:
       - name: Build Next.js standalone
         run: npm run build
 
-      - name: Prepare Bonto deploy folder
+      - name: Prepare Bonto deploy folder without node_modules
         run: |
           rm -rf bonto-deploy
           mkdir -p bonto-deploy
 
+          # Copy standalone output, then remove node_modules because Bonto rejects it
           cp -a .next/standalone/. bonto-deploy/
-          cp -r public bonto-deploy/public
+          rm -rf bonto-deploy/node_modules
 
+          # Copy public and Next static assets
+          cp -r public bonto-deploy/public
           mkdir -p bonto-deploy/.next
           cp -r .next/static bonto-deploy/.next/static
 
+          # Use source package files so Bonto can npm install dependencies
+          cp package.json bonto-deploy/package.json
+          if [ -f package-lock.json ]; then
+            cp package-lock.json bonto-deploy/package-lock.json
+          fi
+
+          # Persistent-ish data folder inside app directory
           mkdir -p bonto-deploy/data
           touch bonto-deploy/data/.gitkeep
+
+          # Prevent accidental node_modules commit
+          cat > bonto-deploy/.gitignore <<'EOF'
+          node_modules/
+          npm-debug.log*
+          .env
+          EOF
+
+          # Keep install lighter on Bonto
+          cat > bonto-deploy/.npmrc <<'EOF'
+          omit=dev
+          optional=true
+          fund=false
+          audit=false
+          EOF
 
       - name: Add Bonto entrypoint
         run: |
@@ -73,14 +98,18 @@ jobs:
           require("./server.js");
           EOF
 
-      - name: Patch package.json start script
+      - name: Patch package.json for Bonto runtime
         run: |
           cd bonto-deploy
           node - <<'EOF'
           const fs = require("fs");
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+
           pkg.scripts = pkg.scripts || {};
           pkg.scripts.start = "node server.js";
+
+          pkg.main = "index.js";
+
           fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
           EOF
 
@@ -90,6 +119,7 @@ jobs:
           test -f bonto-deploy/server.js
           test -f bonto-deploy/index.js
           test -f bonto-deploy/package.json
+          test ! -d bonto-deploy/node_modules
           du -sh bonto-deploy
 
       - name: Push to Bonto Git remote
@@ -104,7 +134,7 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add .
-          git commit -m "Deploy 9router standalone to Bonto"
+          git commit -m "Deploy 9router to Bonto without node_modules"
 
           cat > askpass.sh <<'EOF'
           #!/bin/sh
