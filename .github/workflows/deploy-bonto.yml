@@ -46,46 +46,42 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
+      - name: Install dependencies for build
         run: npm install --include=dev --include=optional
 
       - name: Build Next.js standalone
         run: npm run build
 
-      - name: Prepare Bonto deploy folder without node_modules
+      - name: Prepare Bonto deploy folder
         run: |
           rm -rf bonto-deploy
           mkdir -p bonto-deploy
 
-          # Copy standalone output, then remove node_modules because Bonto rejects it
           cp -a .next/standalone/. bonto-deploy/
+
           rm -rf bonto-deploy/node_modules
 
-          # Copy public and Next static assets
           cp -r public bonto-deploy/public
+
           mkdir -p bonto-deploy/.next
           cp -r .next/static bonto-deploy/.next/static
 
-          # Use source package files so Bonto can npm install dependencies
           cp package.json bonto-deploy/package.json
+
           if [ -f package-lock.json ]; then
             cp package-lock.json bonto-deploy/package-lock.json
           fi
 
-          # Persistent-ish data folder inside app directory
           mkdir -p bonto-deploy/data
           touch bonto-deploy/data/.gitkeep
 
-          # Prevent accidental node_modules commit
           cat > bonto-deploy/.gitignore <<'EOF'
           node_modules/
           npm-debug.log*
           .env
           EOF
 
-          # Keep install lighter on Bonto
           cat > bonto-deploy/.npmrc <<'EOF'
-          omit=dev
           optional=true
           fund=false
           audit=false
@@ -94,7 +90,12 @@ jobs:
       - name: Add Bonto entrypoint
         run: |
           cat > bonto-deploy/index.js <<'EOF'
+          process.env.NODE_ENV = process.env.NODE_ENV || "production";
           process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
+          process.env.PORT = process.env.PORT || "3000";
+          process.env.DATA_DIR = process.env.DATA_DIR || "./data";
+          process.env.NEXT_TELEMETRY_DISABLED = "1";
+
           require("./server.js");
           EOF
 
@@ -106,9 +107,12 @@ jobs:
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 
           pkg.scripts = pkg.scripts || {};
-          pkg.scripts.start = "node server.js";
+          pkg.scripts.start = "node index.js";
 
           pkg.main = "index.js";
+          pkg.engines = {
+            node: "22.x"
+          };
 
           fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
           EOF
@@ -121,6 +125,8 @@ jobs:
           test -f bonto-deploy/package.json
           test ! -d bonto-deploy/node_modules
           du -sh bonto-deploy
+          echo "package.json start script:"
+          node -e "const p=require('./bonto-deploy/package.json'); console.log(p.scripts.start)"
 
       - name: Push to Bonto Git remote
         env:
@@ -134,7 +140,7 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add .
-          git commit -m "Deploy 9router to Bonto without node_modules"
+          git commit -m "Deploy 9router to Bonto"
 
           cat > askpass.sh <<'EOF'
           #!/bin/sh
