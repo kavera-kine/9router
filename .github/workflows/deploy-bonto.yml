@@ -11,6 +11,36 @@ jobs:
       - name: Checkout 9router
         uses: actions/checkout@v4
 
+      - name: Check Bonto credentials
+        env:
+          BONTO_USERNAME: ${{ secrets.BONTO_USERNAME }}
+          BONTO_PASSWORD: ${{ secrets.BONTO_PASSWORD }}
+        run: |
+          echo "BONTO_USERNAME length: ${#BONTO_USERNAME}"
+          echo "BONTO_PASSWORD length: ${#BONTO_PASSWORD}"
+
+          if [ -z "$BONTO_USERNAME" ]; then
+            echo "BONTO_USERNAME is empty"
+            exit 1
+          fi
+
+          if [ -z "$BONTO_PASSWORD" ]; then
+            echo "BONTO_PASSWORD is empty"
+            exit 1
+          fi
+
+          cat > askpass.sh <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *sername*) echo "$BONTO_USERNAME" ;;
+            *assword*) echo "$BONTO_PASSWORD" ;;
+          esac
+          EOF
+
+          chmod +x askpass.sh
+
+          GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git ls-remote https://api.bonto.dev/git/cpa-kavera.git
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -34,6 +64,7 @@ jobs:
           cp -r .next/static bonto-deploy/.next/static
 
           mkdir -p bonto-deploy/data
+          touch bonto-deploy/data/.gitkeep
 
       - name: Add Bonto entrypoint
         run: |
@@ -58,6 +89,7 @@ jobs:
           ls -lah bonto-deploy
           test -f bonto-deploy/server.js
           test -f bonto-deploy/index.js
+          test -f bonto-deploy/package.json
           du -sh bonto-deploy
 
       - name: Push to Bonto Git remote
@@ -67,27 +99,18 @@ jobs:
         run: |
           cd bonto-deploy
 
-          if [ -z "$BONTO_USERNAME" ]; then
-            echo "BONTO_USERNAME is empty"
-            exit 1
-          fi
-
-          if [ -z "$BONTO_PASSWORD" ]; then
-            echo "BONTO_PASSWORD is empty"
-            exit 1
-          fi
-
           git init
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
+
           git add .
           git commit -m "Deploy 9router standalone to Bonto"
 
           cat > askpass.sh <<'EOF'
           #!/bin/sh
           case "$1" in
-            *Username*) echo "$BONTO_USERNAME" ;;
-            *Password*) echo "$BONTO_PASSWORD" ;;
+            *sername*) echo "$BONTO_USERNAME" ;;
+            *assword*) echo "$BONTO_PASSWORD" ;;
           esac
           EOF
 
