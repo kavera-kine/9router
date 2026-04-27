@@ -6,7 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout 9router
@@ -39,6 +39,7 @@ jobs:
           EOF
 
           chmod +x askpass.sh
+
           GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git ls-remote https://api.bonto.dev/git/cpa-kavera.git
 
       - name: Setup QEMU for arm64
@@ -58,11 +59,13 @@ jobs:
               rm -rf node_modules .next bonto-deploy
 
               npm install --include=dev --include=optional --no-audit --no-fund
+
               npm run build
 
               mkdir -p bonto-deploy
 
               cp -a .next/standalone/. bonto-deploy/
+
               cp -r public bonto-deploy/public
 
               mkdir -p bonto-deploy/.next
@@ -72,75 +75,87 @@ jobs:
               touch bonto-deploy/data/.gitkeep
 
               tar -czf bonto-deploy/node_modules.tar.gz -C .next/standalone node_modules
+
               rm -rf bonto-deploy/node_modules
-
-              cat > bonto-deploy/index.js <<'"'"'EOF'"'"'
-              const fs = require("fs");
-              const childProcess = require("child_process");
-
-              function ensureNodeModules() {
-                try {
-                  require.resolve("next/package.json");
-                  return;
-                } catch (_) {
-                  console.log("[startup] node_modules not found; extracting node_modules.tar.gz...");
-                }
-
-                if (!fs.existsSync("node_modules.tar.gz")) {
-                  throw new Error("node_modules.tar.gz not found");
-                }
-
-                childProcess.execFileSync("rm", ["-rf", "node_modules"], { stdio: "inherit" });
-                childProcess.execFileSync("tar", ["-xzf", "node_modules.tar.gz"], { stdio: "inherit" });
-              }
-
-              ensureNodeModules();
-
-              process.env.NODE_ENV = process.env.NODE_ENV || "production";
-              process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
-              process.env.PORT = process.env.PORT || "3000";
-              process.env.DATA_DIR = process.env.DATA_DIR || "./data";
-              process.env.NEXT_TELEMETRY_DISABLED = "1";
-
-              require("./server.js");
-              EOF
-
-              cat > bonto-deploy/package.json <<'"'"'EOF'"'"'
-              {
-                "name": "9router-bonto",
-                "version": "0.4.6",
-                "private": true,
-                "main": "index.js",
-                "scripts": {
-                  "start": "node index.js"
-                },
-                "dependencies": {}
-              }
-              EOF
-
-              cat > bonto-deploy/.gitignore <<'"'"'EOF'"'"'
-              node_modules/
-              npm-debug.log*
-              .env
-              EOF
 
               ls -lah bonto-deploy
               du -sh bonto-deploy
+
               test -f bonto-deploy/server.js
-              test -f bonto-deploy/index.js
-              test -f bonto-deploy/package.json
               test -f bonto-deploy/node_modules.tar.gz
             '
+
+      - name: Fix deploy folder permissions
+        run: |
+          sudo chown -R "$USER:$USER" bonto-deploy
+          chmod -R u+rwX bonto-deploy
+
+      - name: Add Bonto runtime files
+        run: |
+          cat > bonto-deploy/index.js <<'EOF'
+          const fs = require("fs");
+          const childProcess = require("child_process");
+
+          function ensureNodeModules() {
+            try {
+              require.resolve("next/package.json");
+              return;
+            } catch (_) {
+              console.log("[startup] node_modules not found; extracting node_modules.tar.gz...");
+            }
+
+            if (!fs.existsSync("node_modules.tar.gz")) {
+              throw new Error("node_modules.tar.gz not found");
+            }
+
+            childProcess.execFileSync("rm", ["-rf", "node_modules"], { stdio: "inherit" });
+            childProcess.execFileSync("tar", ["-xzf", "node_modules.tar.gz"], { stdio: "inherit" });
+          }
+
+          ensureNodeModules();
+
+          process.env.NODE_ENV = process.env.NODE_ENV || "production";
+          process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
+          process.env.PORT = process.env.PORT || "3000";
+          process.env.DATA_DIR = process.env.DATA_DIR || "./data";
+          process.env.NEXT_TELEMETRY_DISABLED = "1";
+
+          require("./server.js");
+          EOF
+
+          cat > bonto-deploy/package.json <<'EOF'
+          {
+            "name": "9router-bonto",
+            "version": "0.4.6",
+            "private": true,
+            "main": "index.js",
+            "scripts": {
+              "start": "node index.js"
+            },
+            "dependencies": {}
+          }
+          EOF
+
+          cat > bonto-deploy/.gitignore <<'EOF'
+          node_modules/
+          npm-debug.log*
+          yarn-error.log*
+          .env
+          EOF
 
       - name: Verify deploy folder
         run: |
           ls -lah bonto-deploy
           du -sh bonto-deploy
+
           test -f bonto-deploy/server.js
           test -f bonto-deploy/index.js
           test -f bonto-deploy/package.json
           test -f bonto-deploy/node_modules.tar.gz
           test ! -d bonto-deploy/node_modules
+
+          echo "package.json:"
+          cat bonto-deploy/package.json
 
       - name: Push to Bonto Git remote
         env:
@@ -148,6 +163,8 @@ jobs:
           BONTO_PASSWORD: ${{ secrets.BONTO_PASSWORD }}
         run: |
           cd bonto-deploy
+
+          rm -rf .git
 
           git init
           git config user.name "github-actions"
@@ -165,4 +182,5 @@ jobs:
           EOF
 
           chmod +x askpass.sh
+
           GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git push --force https://api.bonto.dev/git/cpa-kavera.git HEAD:master
