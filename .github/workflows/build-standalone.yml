@@ -1,0 +1,40 @@
+name: Build 9router Standalone
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --include=dev --include=optional
+
+      - name: Build Next.js standalone
+        run: npm run build
+
+      - name: Copy public assets
+        run: |
+          cp -r public .next/standalone/public
+          mkdir -p .next/standalone/.next
+          cp -r .next/static .next/standalone/.next/static
+
+      - name: Create zip
+        run: |
+          cd .next/standalone
+          zip -r ../../../9router-standalone-linux.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 9router-standalone-linux
+          path: 9router-standalone-linux.zip
