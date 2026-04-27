@@ -67,13 +67,30 @@ jobs:
         run: |
           cd bonto-deploy
 
+          if [ -z "$BONTO_USERNAME" ]; then
+            echo "BONTO_USERNAME is empty"
+            exit 1
+          fi
+
+          if [ -z "$BONTO_PASSWORD" ]; then
+            echo "BONTO_PASSWORD is empty"
+            exit 1
+          fi
+
           git init
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .
           git commit -m "Deploy 9router standalone to Bonto"
 
-          git remote add bonto https://api.bonto.dev/git/cpa-kavera.git
+          cat > askpass.sh <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo "$BONTO_USERNAME" ;;
+            *Password*) echo "$BONTO_PASSWORD" ;;
+          esac
+          EOF
 
-          AUTH=$(printf "%s:%s" "$BONTO_USERNAME" "$BONTO_PASSWORD" | base64 -w 0)
-          git -c http.https://api.bonto.dev/.extraheader="AUTHORIZATION: basic $AUTH" push --force bonto HEAD:master
+          chmod +x askpass.sh
+
+          GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git push --force https://api.bonto.dev/git/cpa-kavera.git HEAD:master
