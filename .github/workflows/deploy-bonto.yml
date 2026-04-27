@@ -1,0 +1,79 @@
+name: Deploy 9router to Bonto
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 9router
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --include=dev --include=optional
+
+      - name: Build Next.js standalone
+        run: npm run build
+
+      - name: Prepare Bonto deploy folder
+        run: |
+          rm -rf bonto-deploy
+          mkdir -p bonto-deploy
+
+          cp -a .next/standalone/. bonto-deploy/
+          cp -r public bonto-deploy/public
+
+          mkdir -p bonto-deploy/.next
+          cp -r .next/static bonto-deploy/.next/static
+
+          mkdir -p bonto-deploy/data
+
+      - name: Add Bonto entrypoint
+        run: |
+          cat > bonto-deploy/index.js <<'EOF'
+          process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
+          require("./server.js");
+          EOF
+
+      - name: Patch package.json start script
+        run: |
+          cd bonto-deploy
+          node - <<'EOF'
+          const fs = require("fs");
+          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          pkg.scripts = pkg.scripts || {};
+          pkg.scripts.start = "node server.js";
+          fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+          EOF
+
+      - name: Verify deploy folder
+        run: |
+          ls -lah bonto-deploy
+          test -f bonto-deploy/server.js
+          test -f bonto-deploy/index.js
+          du -sh bonto-deploy
+
+      - name: Push to Bonto Git remote
+        env:
+          BONTO_USERNAME: ${{ secrets.BONTO_USERNAME }}
+          BONTO_PASSWORD: ${{ secrets.BONTO_PASSWORD }}
+        run: |
+          cd bonto-deploy
+
+          git init
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git commit -m "Deploy 9router standalone to Bonto"
+
+          git remote add bonto https://api.bonto.dev/git/cpa-kavera.git
+
+          AUTH=$(printf "%s:%s" "$BONTO_USERNAME" "$BONTO_PASSWORD" | base64 -w 0)
+          git -c http.https://api.bonto.dev/.extraheader="AUTHORIZATION: basic $AUTH" push --force bonto HEAD:master
