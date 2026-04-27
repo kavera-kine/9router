@@ -6,6 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout 9router
@@ -38,95 +39,108 @@ jobs:
           EOF
 
           chmod +x askpass.sh
-
           GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git ls-remote https://api.bonto.dev/git/cpa-kavera.git
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup QEMU for arm64
+        uses: docker/setup-qemu-action@v3
         with:
-          node-version: 22
+          platforms: arm64
 
-      - name: Install dependencies for build
-        run: npm install --include=dev --include=optional
-
-      - name: Build Next.js standalone
-        run: npm run build
-
-      - name: Prepare Bonto deploy folder
+      - name: Build standalone in linux arm64 container
         run: |
-          rm -rf bonto-deploy
-          mkdir -p bonto-deploy
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/work \
+            -w /work \
+            node:22-alpine \
+            sh -lc '
+              apk add --no-cache python3 make g++ git tar gzip
 
-          cp -a .next/standalone/. bonto-deploy/
+              rm -rf node_modules .next bonto-deploy
 
-          rm -rf bonto-deploy/node_modules
+              npm install --include=dev --include=optional --no-audit --no-fund
+              npm run build
 
-          cp -r public bonto-deploy/public
+              mkdir -p bonto-deploy
 
-          mkdir -p bonto-deploy/.next
-          cp -r .next/static bonto-deploy/.next/static
+              cp -a .next/standalone/. bonto-deploy/
+              cp -r public bonto-deploy/public
 
-          cp package.json bonto-deploy/package.json
+              mkdir -p bonto-deploy/.next
+              cp -r .next/static bonto-deploy/.next/static
 
-          if [ -f package-lock.json ]; then
-            cp package-lock.json bonto-deploy/package-lock.json
-          fi
+              mkdir -p bonto-deploy/data
+              touch bonto-deploy/data/.gitkeep
 
-          mkdir -p bonto-deploy/data
-          touch bonto-deploy/data/.gitkeep
+              tar -czf bonto-deploy/node_modules.tar.gz -C .next/standalone node_modules
+              rm -rf bonto-deploy/node_modules
 
-          cat > bonto-deploy/.gitignore <<'EOF'
-          node_modules/
-          npm-debug.log*
-          .env
-          EOF
+              cat > bonto-deploy/index.js <<'"'"'EOF'"'"'
+              const fs = require("fs");
+              const childProcess = require("child_process");
 
-          cat > bonto-deploy/.npmrc <<'EOF'
-          optional=true
-          fund=false
-          audit=false
-          EOF
+              function ensureNodeModules() {
+                try {
+                  require.resolve("next/package.json");
+                  return;
+                } catch (_) {
+                  console.log("[startup] node_modules not found; extracting node_modules.tar.gz...");
+                }
 
-      - name: Add Bonto entrypoint
-        run: |
-          cat > bonto-deploy/index.js <<'EOF'
-          process.env.NODE_ENV = process.env.NODE_ENV || "production";
-          process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
-          process.env.PORT = process.env.PORT || "3000";
-          process.env.DATA_DIR = process.env.DATA_DIR || "./data";
-          process.env.NEXT_TELEMETRY_DISABLED = "1";
+                if (!fs.existsSync("node_modules.tar.gz")) {
+                  throw new Error("node_modules.tar.gz not found");
+                }
 
-          require("./server.js");
-          EOF
+                childProcess.execFileSync("rm", ["-rf", "node_modules"], { stdio: "inherit" });
+                childProcess.execFileSync("tar", ["-xzf", "node_modules.tar.gz"], { stdio: "inherit" });
+              }
 
-      - name: Patch package.json for Bonto runtime
-        run: |
-          cd bonto-deploy
-          node - <<'EOF'
-          const fs = require("fs");
-          const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+              ensureNodeModules();
 
-          pkg.scripts = pkg.scripts || {};
-          pkg.scripts.start = "node index.js";
+              process.env.NODE_ENV = process.env.NODE_ENV || "production";
+              process.env.HOSTNAME = process.env.HOSTNAME || "0.0.0.0";
+              process.env.PORT = process.env.PORT || "3000";
+              process.env.DATA_DIR = process.env.DATA_DIR || "./data";
+              process.env.NEXT_TELEMETRY_DISABLED = "1";
 
-          pkg.main = "index.js";
-          pkg.engines = {
-            node: "22.x"
-          };
+              require("./server.js");
+              EOF
 
-          fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
-          EOF
+              cat > bonto-deploy/package.json <<'"'"'EOF'"'"'
+              {
+                "name": "9router-bonto",
+                "version": "0.4.6",
+                "private": true,
+                "main": "index.js",
+                "scripts": {
+                  "start": "node index.js"
+                },
+                "dependencies": {}
+              }
+              EOF
+
+              cat > bonto-deploy/.gitignore <<'"'"'EOF'"'"'
+              node_modules/
+              npm-debug.log*
+              .env
+              EOF
+
+              ls -lah bonto-deploy
+              du -sh bonto-deploy
+              test -f bonto-deploy/server.js
+              test -f bonto-deploy/index.js
+              test -f bonto-deploy/package.json
+              test -f bonto-deploy/node_modules.tar.gz
+            '
 
       - name: Verify deploy folder
         run: |
           ls -lah bonto-deploy
+          du -sh bonto-deploy
           test -f bonto-deploy/server.js
           test -f bonto-deploy/index.js
           test -f bonto-deploy/package.json
+          test -f bonto-deploy/node_modules.tar.gz
           test ! -d bonto-deploy/node_modules
-          du -sh bonto-deploy
-          echo "package.json start script:"
-          node -e "const p=require('./bonto-deploy/package.json'); console.log(p.scripts.start)"
 
       - name: Push to Bonto Git remote
         env:
@@ -140,7 +154,7 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add .
-          git commit -m "Deploy 9router to Bonto"
+          git commit -m "Deploy 9router bundled to Bonto"
 
           cat > askpass.sh <<'EOF'
           #!/bin/sh
@@ -151,5 +165,4 @@ jobs:
           EOF
 
           chmod +x askpass.sh
-
           GIT_ASKPASS="$PWD/askpass.sh" GIT_TERMINAL_PROMPT=0 git push --force https://api.bonto.dev/git/cpa-kavera.git HEAD:master
